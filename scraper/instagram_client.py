@@ -14,8 +14,6 @@ from typing import Optional, Dict, Any, List, Tuple
 from urllib.parse import urlparse
 
 import requests
-from ratelimit import limits, sleep_and_retry
-import backoff
 
 from .models import Restaurant
 
@@ -51,6 +49,8 @@ class InstagramClient:
             "Accept-Encoding": "gzip, deflate",
             "Connection": "keep-alive",
         })
+        self._last_request_time = 0
+        self._min_request_interval = 60.0 / self.CALLS_PER_MINUTE
 
     @staticmethod
     def extract_instagram_handle(url: str) -> Optional[str]:
@@ -105,8 +105,6 @@ class InstagramClient:
 
         return None
 
-    @sleep_and_retry
-    @limits(calls=CALLS_PER_MINUTE, period=60)
     def _fetch_url(self, url: str, timeout: int = 15) -> Optional[str]:
         """Fetch URL content with rate limiting.
 
@@ -117,8 +115,14 @@ class InstagramClient:
         Returns:
             Response text or None if failed.
         """
+        # Simple rate limiting
+        elapsed = time.time() - self._last_request_time
+        if elapsed < self._min_request_interval:
+            time.sleep(self._min_request_interval - elapsed)
+
         try:
             response = self.session.get(url, timeout=timeout, allow_redirects=True)
+            self._last_request_time = time.time()
             response.raise_for_status()
             return response.text
         except requests.RequestException as e:

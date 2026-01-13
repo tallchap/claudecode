@@ -7,7 +7,6 @@ from typing import List, Optional, Dict, Any, Iterator
 from dataclasses import dataclass
 
 import requests
-from ratelimit import limits, sleep_and_retry
 import backoff
 
 from .models import Restaurant
@@ -54,9 +53,9 @@ class YelpClient:
                 "Accept": "application/json",
             }
         )
+        self._last_request_time = 0
+        self._min_request_interval = 60.0 / self.CALLS_PER_MINUTE  # seconds between requests
 
-    @sleep_and_retry
-    @limits(calls=CALLS_PER_MINUTE, period=60)
     @backoff.on_exception(backoff.expo, requests.RequestException, max_tries=3)
     def _make_request(
         self, endpoint: str, params: Optional[Dict[str, Any]] = None
@@ -73,10 +72,16 @@ class YelpClient:
         Raises:
             YelpAPIError: If API returns an error.
         """
+        # Simple rate limiting
+        elapsed = time.time() - self._last_request_time
+        if elapsed < self._min_request_interval:
+            time.sleep(self._min_request_interval - elapsed)
+
         url = f"{self.BASE_URL}{endpoint}"
 
         try:
             response = self.session.get(url, params=params, timeout=30)
+            self._last_request_time = time.time()
             response.raise_for_status()
             return response.json()
         except requests.HTTPError as e:

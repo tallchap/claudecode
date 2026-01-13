@@ -1,12 +1,12 @@
 """Google Places API client for restaurant data enrichment."""
 
 import os
+import time
 import logging
 from typing import Optional, Dict, Any, List
 from urllib.parse import quote_plus
 
 import requests
-from ratelimit import limits, sleep_and_retry
 import backoff
 
 from .models import Restaurant
@@ -44,9 +44,9 @@ class GooglePlacesClient:
             )
 
         self.session = requests.Session()
+        self._last_request_time = 0
+        self._min_request_interval = 60.0 / self.CALLS_PER_MINUTE
 
-    @sleep_and_retry
-    @limits(calls=CALLS_PER_MINUTE, period=60)
     @backoff.on_exception(backoff.expo, requests.RequestException, max_tries=3)
     def _make_request(
         self, endpoint: str, params: Dict[str, Any]
@@ -63,11 +63,17 @@ class GooglePlacesClient:
         Raises:
             GooglePlacesError: If API returns an error.
         """
+        # Simple rate limiting
+        elapsed = time.time() - self._last_request_time
+        if elapsed < self._min_request_interval:
+            time.sleep(self._min_request_interval - elapsed)
+
         url = f"{self.BASE_URL}{endpoint}"
         params["key"] = self.api_key
 
         try:
             response = self.session.get(url, params=params, timeout=30)
+            self._last_request_time = time.time()
             response.raise_for_status()
             data = response.json()
 
